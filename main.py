@@ -1,4 +1,3 @@
-```python
 import os
 import arxiv
 import openai
@@ -213,7 +212,7 @@ def assemble_radio_script(full_batches_text, total_papers):
     script_parts = [intro, ""]
     for i, (title, body) in enumerate(all_blocks, start=1):
         title_tts = sanitize_title_for_tts(title)
-        transition = f" {i}번째 논문입니다."
+        transition = f"지금부터 {i}번째 논문입니다."
         script_parts.append(transition)
         script_parts.append(body)
         script_parts.append("")
@@ -352,4 +351,3 @@ def run_bot():
 
 if __name__ == "__main__":
     run_bot()
-```
