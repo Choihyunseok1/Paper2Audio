@@ -90,16 +90,17 @@ def run_bot():
     summary_text = full_text.split("[대본]")[0].replace("[요약]", "").strip()
     audio_script = full_text.split("[대본]")[1].strip()
 
-    # 6. 하나의 통합 오디오 파일 생성
-    today_str = now.strftime("%Y%m%d")
-    file_name = f"Daily_Briefing_{today_str}.mp3"
+    # 6. 통합 오디오 파일명 설정 (오늘 날짜 기준)
+    # now는 앞에서 서울 시간(Asia/Seoul)으로 이미 설정되어 있어야 합니다.
+    today_date = now.strftime('%Y%m%d') 
+    file_name = f"Briefing_{today_date}.mp3" 
     full_file_path = os.path.join(audio_dir, file_name)
 
     audio_response = client.audio.speech.create(
         model="tts-1-hd",
         voice="echo",
         input=audio_script,
-        speed=0.8
+        speed=0.95
     )
     audio_response.stream_to_file(full_file_path)
 
