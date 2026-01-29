@@ -64,14 +64,13 @@ def run_bot():
     - 논문들 사이는 줄바꿈으로 구분할 것.
 
     2. [대본]
-    - 형식: 라디오 방송 '모닝 AI 브리핑' 통합 스크립트.
+    - 형식: 라디오 방송 '모닝 Computer Vision AI 브리핑' 통합 스크립트.
     - {len(valid_papers)}개의 논문을 자연스럽게 연결하며 하나의 에피소드로 구성할 것.
-    - 쉼표(,)를 적극적으로 사용하여 아나운서가 뉴스 브리핑을 하듯 적절한 호흡을 넣을 것.
-    - 도입부에서 오늘 브리핑할 논문 개수를 언급하며 시작.
+    - 쉼표(,)를 적극적으로 사용하여 아나운서가 뉴스 브리핑을 하듯 차분한, 천천히 호흡을 넣을 것.
+    - 도입부에서 오늘 브리핑할 논문 개수를 언급하며 시작할 것.
     - 차분하고 정중한 어조 유지.
     - 모든 영어 약어와 고유 명사는 TTS가 오독하지 않도록 한글 발음대로 표기해 주세요. (예: IRCV -> 아이알씨브이, SOTA -> 소타)
     - 마무리 멘트와 함께 정중한 인사.
-    - 논문 하나당 1~2분의 길이로 설명할 것.
 
     출력 형식:
     [요약]
@@ -94,14 +93,14 @@ def run_bot():
     # 6. 통합 오디오 파일명 설정 (오늘 날짜 기준)
     # now는 앞에서 서울 시간(Asia/Seoul)으로 이미 설정되어 있어야 합니다.
     today_date = now.strftime('%Y%m%d') 
-    file_name = f"Briefing_{today_date}.mp3" 
+    file_name = f"CV_Daily_Briefing_{today_date}.mp3" 
     full_file_path = os.path.join(audio_dir, file_name)
 
     audio_response = client.audio.speech.create(
         model="tts-1-hd",
         voice="echo",
         input=audio_script,
-        speed=0.95
+        speed=1
     )
     audio_response.stream_to_file(full_file_path)
 
