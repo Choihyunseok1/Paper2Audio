@@ -1,4 +1,16 @@
-# ... (앞부분 생략: import 및 설정 동일)
+import os
+import arxiv
+import openai
+from notion_client import Client
+import datetime
+
+# 깃허브 금고에서 열쇠 가져오기
+NOTION_TOKEN = os.environ["NOTION_TOKEN"]
+DATABASE_ID = os.environ["DATABASE_ID"]
+OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+
+notion = Client(auth=NOTION_TOKEN)
+client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
 def run_bot():
     search = arxiv.Search(query="cat:cs.CV", max_results=3, sort_by=arxiv.SortCriterion.SubmittedDate)
