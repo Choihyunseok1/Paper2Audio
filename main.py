@@ -108,7 +108,7 @@ def run_bot():
 
     audio_response = client.audio.speech.create(
         model="tts-1-hd",
-        voice="echo",
+        voice="onyx",
         input=audio_script,
         speed=1
     )
