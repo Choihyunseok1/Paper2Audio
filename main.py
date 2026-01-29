@@ -305,7 +305,7 @@ def run_bot():
 
     audio_url = f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/audio/{file_name_full}"
     audio_url_3min = f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/audio/{file_name_3min}"
-    page_title = f"[{now.strftime('%Y-%m-%d')}] 브리핑 - 요약 & 논문 링크 (전체 {len(valid_papers)}건)"
+    page_title = f"{now.strftime('%Y-%m-%d')} 모닝 브리핑 ({len(valid_papers)}개)"
 
     # --------- 요약을 2000자 제한에 맞춰 쪼개기 ---------
     notion_children = [
