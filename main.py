@@ -344,7 +344,7 @@ def run_bot():
         properties={
             "요약 & 논문링크": {"title": [{"text": {"content": page_title}}]},
             "날짜": {"date": {"start": now.date().isoformat()}},
-            "오디오": {
+            "전체 브리핑": {
                 "rich_text": [
                     {
                         "type": "text",
@@ -355,7 +355,7 @@ def run_bot():
                     }
                 ]
             },
-            "3분 논문": {
+            "3분 요약": {
                 "rich_text": [
                     {
                         "type": "text",
