@@ -87,7 +87,7 @@ def prompt_summary_and_3min(valid_papers):
 - 모든 논문을 최소한 한 단락 이상 설명할 것.
 - 논문의 공식 제목은 반드시 영문으로 표기하되, 제목의 특수 기호(:, -, +, / 등)는 쉼표(,)로 바꿀 것.
 - 기술 약어(CNN, ViT, SOTA 등)는 100% 한글 발음으로만 표기할 것.
-- 전문 기술 용어(diffusion, transformer, attention, latent, encoder, decoder 등)는 번역하지 말고 반드시 영어 원어 그대로 사용할 것.
+- 전문 기술 용어(diffusion, transformer, attention, self-attention, cross-attention, latent, encoder, decoder, backbone, head, neck, pipeline, architecture, framework, module, block, layer, stage, feature, representation, embedding, token, patch, pixel, resolution, scale, multi-scale, spatial, temporal, semantic, instance, object, bounding box, mask, classification, regression, detection, segmentation, tracking, matching, retrieval, generation, reconstruction, prediction, training, inference, optimization, loss, objective, gradient, backpropagation, scheduler, warmup, regularization, overfitting, underfitting, convergence, likelihood, log-likelihood, prior, posterior, sampling, denoising, noise, variance, distribution, gaussian, entropy, kl-divergence, dataset, benchmark, metric, accuracy, precision, recall, f-score, mean average precision, intersection over union, foundation model, large-scale, multi-modal, vision-language, prompt, prompting, alignment, zero-shot, few-shot, in-context learning, parameter-efficient tuning, point cloud, voxel, mesh, depth, pose, camera, ray, rendering, video, frame, motion, optical flow, reinforcement learning, policy, value function, reward, exploration, exploitation, environment, agent, state, action, episode, timestep, imitation learning, self-supervised learning, supervised learning, unsupervised learning, contrastive learning, pretraining, fine-tuning, transfer learning, curriculum learning, data augmentation, normalization, batch normalization, layer normalization, residual connection, skip connection, attention map, positional encoding, query, key, value, softmax, temperature, logits, probability, score, confidence, threshold, calibration, robustness, generalization, scalability, efficiency, latency, throughput, memory, parameter, hyperparameter, initialization, seed, reproducibility, ablation study, baseline, state-of-the-art, sota, comparison, improvement, gain, trade-off, limitation, future work 등)는 번역하지 말고 반드시 영어 원어 그대로 사용할 것.
 
 - 쉼표(,)를 충분히 사용해 호흡 지점을 표시할 것.
 - 동료 연구자에게 설명하듯 차분한 구어체.
@@ -147,7 +147,7 @@ F. 실전 감상 포인트 2개
 - 전체 브리핑은 반드시 공적인 라디오 방송 톤의 존댓말로 작성할 것.
 - 반말, 구어체 축약, 친근한 대화체(예: ~해요, ~했죠)는 사용하지 말 것.
 - 연구 비서가 공식적으로 설명하는 말투를 유지할 것.
-- 전문 기술 용어(diffusion, transformer, attention, latent, encoder, decoder 등)는 번역하지 말고 반드시 영어 원어 그대로 사용할 것.
+- 전문 기술 용어(diffusion, transformer, attention, self-attention, cross-attention, latent, encoder, decoder, backbone, head, neck, pipeline, architecture, framework, module, block, layer, stage, feature, representation, embedding, token, patch, pixel, resolution, scale, multi-scale, spatial, temporal, semantic, instance, object, bounding box, mask, classification, regression, detection, segmentation, tracking, matching, retrieval, generation, reconstruction, prediction, training, inference, optimization, loss, objective, gradient, backpropagation, scheduler, warmup, regularization, overfitting, underfitting, convergence, likelihood, log-likelihood, prior, posterior, sampling, denoising, noise, variance, distribution, gaussian, entropy, kl-divergence, dataset, benchmark, metric, accuracy, precision, recall, f-score, mean average precision, intersection over union, foundation model, large-scale, multi-modal, vision-language, prompt, prompting, alignment, zero-shot, few-shot, in-context learning, parameter-efficient tuning, point cloud, voxel, mesh, depth, pose, camera, ray, rendering, video, frame, motion, optical flow, reinforcement learning, policy, value function, reward, exploration, exploitation, environment, agent, state, action, episode, timestep, imitation learning, self-supervised learning, supervised learning, unsupervised learning, contrastive learning, pretraining, fine-tuning, transfer learning, curriculum learning, data augmentation, normalization, batch normalization, layer normalization, residual connection, skip connection, attention map, positional encoding, query, key, value, softmax, temperature, logits, probability, score, confidence, threshold, calibration, robustness, generalization, scalability, efficiency, latency, throughput, memory, parameter, hyperparameter, initialization, seed, reproducibility, ablation study, baseline, state-of-the-art, sota, comparison, improvement, gain, trade-off, limitation, future work 등)는 번역하지 말고 반드시 영어 원어 그대로 사용할 것.
 
 출력 형식(반드시 준수):
 TITLE: <영문 제목>
@@ -375,7 +375,7 @@ def run_bot():
                     {
                         "type": "text",
                         "text": {
-                            "content": "▶ 바로 다운",
+                            "content": "▶ 전체 브리핑 다운",
                             "link": {"url": audio_url}
                         }
                     }
@@ -386,7 +386,7 @@ def run_bot():
                     {
                         "type": "text",
                         "text": {
-                            "content": "▶ 바로 다운",
+                            "content": "▶ 3분 요약 다운",
                             "link": {"url": audio_url_3min}
                         }
                     }
