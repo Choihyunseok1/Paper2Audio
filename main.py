@@ -81,12 +81,13 @@ def prompt_summary_and_3min(valid_papers):
 2. [3분대본]
 - "시간이 없으신 분들을 위한 3분 핵심 요약입니다"로 시작할 것.
 - 모든 논문을 빠짐없이 포함할 것.
-- 각 논문 제목을 말한 뒤, 논문 당 약 400자 내외로 설명할 것.
-- 전체 분량은 약 3분 분량을 목표로 조절할 것.
+- 각 논문 제목을 말한 뒤 , 논문 당 약 400자 내외로 설명할 것.
+- 전체 길이는 약 3분(±15초) 분량이 되도록 조절할 것.
+- 논문 수가 많을 경우, 각 논문의 설명 길이를 자동으로 줄여서 전체 분량을 유지할 것.
 - 분량이 부족하더라도 일부 논문을 생략하지 말 것.
 - 모든 논문을 최소한 한 단락 이상 설명할 것.
 - 논문의 공식 제목은 반드시 영문으로 표기하되, 제목의 특수 기호(:, -, +, / 등)는 쉼표(,)로 바꿀 것.
-- 기술 약어(CNN, ViT, SOTA 등)는 100% 한글 발음으로만 표기할 것.
+- CNN, ViT, GAN, SOTA 등 약어는 영문 그대로 사용할 것.
 - 전문 기술 용어(diffusion, transformer, attention, self-attention, cross-attention, latent, encoder, decoder, backbone, head, neck, pipeline, architecture, framework, module, block, layer, stage, feature, representation, embedding, token, patch, pixel, resolution, scale, multi-scale, spatial, temporal, semantic, instance, object, bounding box, mask, classification, regression, detection, segmentation, tracking, matching, retrieval, generation, reconstruction, prediction, training, inference, optimization, loss, objective, gradient, backpropagation, scheduler, warmup, regularization, overfitting, underfitting, convergence, likelihood, log-likelihood, prior, posterior, sampling, denoising, noise, variance, distribution, gaussian, entropy, kl-divergence, dataset, benchmark, metric, accuracy, precision, recall, f-score, mean average precision, intersection over union, foundation model, large-scale, multi-modal, vision-language, prompt, prompting, alignment, zero-shot, few-shot, in-context learning, parameter-efficient tuning, point cloud, voxel, mesh, depth, pose, camera, ray, rendering, video, frame, motion, optical flow, reinforcement learning, policy, value function, reward, exploration, exploitation, environment, agent, state, action, episode, timestep, imitation learning, self-supervised learning, supervised learning, unsupervised learning, contrastive learning, pretraining, fine-tuning, transfer learning, curriculum learning, data augmentation, normalization, batch normalization, layer normalization, residual connection, skip connection, attention map, positional encoding, query, key, value, softmax, temperature, logits, probability, score, confidence, threshold, calibration, robustness, generalization, scalability, efficiency, latency, throughput, memory, parameter, hyperparameter, initialization, seed, reproducibility, ablation study, baseline, state-of-the-art, sota, comparison, improvement, gain, trade-off, limitation, future work 등)는 번역하지 말고 반드시 영어 원어 그대로 사용할 것.
 
 - 쉼표(,)를 충분히 사용해 호흡 지점을 표시할 것.
@@ -141,7 +142,7 @@ F. 실전 감상 포인트 2개
 언어 규칙:
 - 기술 약어(CNN, ViT, SOTA 등)는 한글 발음으로만 표기할 것.
 - 쉼표(,)로 호흡, 마침표(.)로 강조.
-- 모든 기술 약어(CNN, ViT, SOTA 등)는 100% 한글 발음으로만 표기할 것.
+- CNN, ViT, GAN, SOTA 등 약어는 영문 그대로 사용할 것.
 - 동료 연구자에게 설명하듯 차분한 구어체.
 - 오디오 스크립트에서는 절대 "A.", "B.", "첫째", "다음으로", "이어서" 등 구조나 순서를 직접적으로 언급하지 마세요.
 - 전체 브리핑은 반드시 공적인 라디오 방송 톤의 존댓말로 작성할 것.
@@ -243,12 +244,12 @@ def assemble_radio_script(full_batches_text, total_papers):
             transition = f"계속해서 {i}번째 논문을 보겠습니다."
 
         script_parts.append(transition)
-        script_parts.append(f"{title_tts}.")
+        script_parts.append(f"논문 제목은 {title_tts} 입니다.")
         script_parts.append(body)
         script_parts.append("")
 
     if len(all_blocks) < total_papers:
-        script_parts.append("일부 논문 원고가 누락되어, 생성된 부분까지만 이어서 읽겠습니다.")
+        script_parts.append("일부 논문은 요약 중심으로 간략히 다뤄졌습니다.")
         script_parts.append("")
 
     script_parts.append(outro)
