@@ -210,7 +210,12 @@ def assemble_radio_script(full_batches_text, total_papers):
     script_parts = [intro, ""]
     for i, (title, body) in enumerate(all_blocks, start=1):
         title_tts = sanitize_title_for_tts(title)
-        transition = f"지금부터 {i}번째 논문입니다."
+        
+        if i == 1:
+            transition = "오늘 첫 번째로 살펴볼 논문입니다."
+        else:
+            transition = f"계속해서 {i}번째 논문을 보겠습니다."
+
         script_parts.append(transition)
         script_parts.append(f"{title_tts}.")
         script_parts.append(body)
@@ -300,9 +305,9 @@ def run_bot():
 
     audio_url = f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/audio/{file_name_full}"
     audio_url_3min = f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/audio/{file_name_3min}"
-    page_title = f"[{now.strftime('%Y-%m-%d')}] 통합 브리핑 ({len(valid_papers)}건)"
+    page_title = f"[{now.strftime('%Y-%m-%d')}] 브리핑 - 요약 & 논문 링크 (전체 {len(valid_papers)}건)"
 
-    # --------- 여기부터가 "바뀐 부분"의 핵심: 요약을 2000자 제한에 맞춰 쪼개기 ---------
+    # --------- 요약을 2000자 제한에 맞춰 쪼개기 ---------
     notion_children = [
         {"object": "block", "type": "heading_2",
          "heading_2": {"rich_text": [{"type": "text", "text": {"content": "논문 핵심 요약"}}]}},
@@ -337,10 +342,31 @@ def run_bot():
     notion.pages.create(
         parent={"database_id": DATABASE_ID},
         properties={
-            "이름": {"title": [{"text": {"content": page_title}}]},
+            "요약 & 논문링크": {"title": [{"text": {"content": page_title}}]},
             "날짜": {"date": {"start": now.date().isoformat()}},
-            "오디오": {"url": audio_url},
-            "3분 논문": {"url": audio_url_3min}
+            "오디오": {
+                "rich_text": [
+                    {
+                        "type": "text",
+                        "text": {
+                            "content": "▶ 바로 다운",
+                            "link": {"url": audio_url}
+                        }
+                    }
+                ]
+            },
+            "3분 논문": {
+                "rich_text": [
+                    {
+                        "type": "text",
+                        "text": {
+                            "content": "▶ 바로 다운",
+                            "link": {"url": audio_url_3min}
+                        }
+                    }
+                ]
+            }
+
         },
         children=notion_children
     )
