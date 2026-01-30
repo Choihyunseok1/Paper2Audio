@@ -60,14 +60,8 @@ ET_TZ = ZoneInfo("America/New_York")
 S2_BASE = "https://api.semanticscholar.org/graph/v1"
 S2_TIMEOUT = 10
 
-POSITIVE_KEYWORDS = [
-    "transformer", "diffusion", "attention", "multimodal", "vision-language",
-    "end-to-end", "benchmark", "dataset", "large-scale", "foundation model",
-    "distillation", "self-supervised", "contrastive", "retrieval", "tracking",
-    "segmentation", "detection", "3d", "point cloud", "neural rendering",
-    "video", "temporal", "efficient", "real-time"
-]
-NEGATIVE_HYPE = ["revolutionary", "breakthrough", "sota", "state-of-the-art"]
+
+# NEGATIVE_HYPE = ["revolutionary", "breakthrough", "sota", "state-of-the-art"]
 CODE_HINTS = ["github.com", "gitlab.com", "bitbucket.org", "project page", "code"]
 
 
@@ -219,12 +213,9 @@ def prescore_text(p: Any) -> float:
     abst = safe_lower(p.summary)
     text = title + " " + abst
 
-    kw_hits = sum(1 for k in POSITIVE_KEYWORDS if k in text)
-    hype_hits = sum(1 for k in NEGATIVE_HYPE if k in text)
     code_hit = any(h in text for h in CODE_HINTS)
 
     score = 0.0
-    score += min(kw_hits * 2.0, 18.0)
     score += 6.0 if code_hit else 0.0
     score -= min(hype_hits * 2.0, 6.0)
     return score
@@ -306,13 +297,10 @@ def compute_content_score(p: Any) -> float:
     abst = safe_lower(p.summary)
     text = title + " " + abst
 
-    kw_hits = sum(1 for k in POSITIVE_KEYWORDS if k in text)
     code_hit = any(h in text for h in CODE_HINTS)
 
-    score = 0.0
-    score += min(kw_hits * 2.0, 18.0)
-    score += 7.0 if code_hit else 0.0
-    return max(0.0, min(25.0, score))
+    return 10.0 if code_hit else 0.0
+
 
 
 def compute_penalty(p: Any) -> float:
@@ -332,10 +320,10 @@ def score_paper(p: Any) -> ScoredPaper:
 
     author = compute_author_score(s2)
     content = compute_content_score(p)
-    penalty = compute_penalty(p)
-
+    penalty = 0.0
+    
     total = author + content + penalty
-    total = max(0.0, min(100.0, total * (100.0 / 95.0)))
+    total = max(0.0, min(100.0, total * (100.0 / 80.0)))
 
     return ScoredPaper(
         paper=p,
