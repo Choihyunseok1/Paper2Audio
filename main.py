@@ -129,6 +129,22 @@ def split_notion_text(text: str, max_len: int = 1900) -> List[str]:
     return [t[i:i + max_len] for i in range(0, len(t), max_len)]
 
 
+def number_to_korean_ordinal(n: int) -> str:
+    mapping = {
+        1: "첫 번째",
+        2: "두 번째",
+        3: "세 번째",
+        4: "네 번째",
+        5: "다섯 번째",
+        6: "여섯 번째",
+        7: "일곱 번째",
+        8: "여덟 번째",
+        9: "아홉 번째",
+        10: "열 번째",
+    }
+    return mapping.get(n, f"{n}번째")
+
+
 def chunk_text_by_chars(text: str, chunk_chars: int = 2000, overlap: int = 0) -> List[str]:
     t = (text or "").strip()
     if not t:
@@ -497,7 +513,8 @@ def assemble_radio_script(
     script_parts = [intro, ""]
     for i, (title, body) in enumerate(all_blocks, start=1):
         title_tts = sanitize_title_for_tts(title)
-        script_parts.append(f"{i}번째 논문입니다.")
+        ordinal = number_to_korean_ordinal(i)
+        script_parts.append(f"{ordinal} 논문입니다.")
         script_parts.append(f"논문 제목은 {title_tts} 입니다.")
         script_parts.append(body)
         script_parts.append("")
