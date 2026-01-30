@@ -48,7 +48,6 @@ TTS_MODEL = "tts-1-hd"
 TTS_VOICE = "onyx"
 TTS_SPEED = 1.25
 
-# TTS chunking 품질 개선: 문장 단위 chunk 권장
 TTS_CHUNK_CHARS = 1700
 
 SEOUL_TZ = ZoneInfo("Asia/Seoul")
@@ -57,7 +56,6 @@ ET_TZ = ZoneInfo("America/New_York")
 S2_BASE = "https://api.semanticscholar.org/graph/v1"
 S2_TIMEOUT = 15
 
-# code_open 오탐 줄이기: 도메인 기반 힌트만 유지
 CODE_HINTS = [
     "github.com/",
     "gitlab.com/",
@@ -65,7 +63,6 @@ CODE_HINTS = [
     "huggingface.co/",
 ]
 
-# Semantic Scholar 호출 안정화 설정
 S2_MAX_RETRIES = 4
 S2_BACKOFF_BASE_SEC = 1.2
 S2_JITTER_SEC = 0.35
@@ -82,9 +79,6 @@ class ScoredPaper:
 
 # =========================
 # TIME WINDOW: arXiv announce 기준 (ET)
-# - Tue/Wed/Thu: (prev day 14:00) ~ (today 14:00)
-# - Mon: (Fri 14:00) ~ (Mon 14:00)
-# - Sun: (Thu 14:00) ~ (Fri 14:00)
 # =========================
 def is_announce_day_et(d: datetime.date) -> bool:
     return d.weekday() in (0, 1, 2, 3, 6)
@@ -104,9 +98,9 @@ def compute_announce_window_et(now_et: datetime.datetime) -> Tuple[datetime.date
     ad = latest_announce_date_et(now_et)
 
     if ad.weekday() == 6:
-        end_date = ad - datetime.timedelta(days=2)  # Friday
+        end_date = ad - datetime.timedelta(days=2)
         end_et = datetime.datetime(end_date.year, end_date.month, end_date.day, 14, 0, tzinfo=ET_TZ)
-        start_et = end_et - datetime.timedelta(days=1)  # Thursday 14:00
+        start_et = end_et - datetime.timedelta(days=1)
         return start_et, end_et, ad
 
     if ad.weekday() == 0:
@@ -440,11 +434,6 @@ def prompt_summary_and_3min(top_papers: List[Any], kst_date_iso: str, kst_date_k
 - 반말, 구어체 축약, 친근한 대화체(예: ~해요, ~했죠)는 사용하지 마십시오.
 - 연구 비서가 공식적으로 설명하는 말투를 유지하십시오.
 
-마무리 규칙
-- 모든 논문 설명이 끝난 뒤, 아래 톤의 아웃트로 멘트를 한 문단으로 추가하십시오.
-- 감사 인사나 일상적인 인삿말은 사용하지 말아 주십시오.
-- 더 자세한 내용이 전체 브리핑에 있다는 점을 자연스럽게 안내하십시오.
-
 출력 형식
 [요약]
 (내용)
@@ -688,16 +677,13 @@ def run_bot():
     notion_children += [
         {"object": "block", "type": "divider", "divider": {}},
         {"object": "block", "type": "heading_2",
-         "heading_2": {"rich_text": [{"type": "text", "text": {"content": "Top 논문 원문 링크"}}]}},
+         "heading_2": {"rich_text": [{"type": "text", "text": {"content": "논문 원문 링크"}}]}},
     ]
 
+    # 점수 표기 제거: 제목 + PDF 링크만
     for rank, sp in enumerate(top, start=1):
         p = sp.paper
-        line = (
-            f"{rank}. {p.title}  "
-            f"(score={sp.score:.1f}, author={sp.score_detail['author']:.1f}, "
-            f"code_open={sp.score_detail['code_open']:.1f}, s2_ok={sp.score_detail['s2_ok']:.0f})"
-        )
+        line = f"{rank}. {p.title}"
         notion_children.append({
             "object": "block",
             "type": "bulleted_list_item",
