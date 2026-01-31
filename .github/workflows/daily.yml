@@ -1,7 +1,7 @@
 name: CV_Papers_Podcast_bot
 on:
   schedule:
-    - cron: "0 2 * * *"  # 02:00 UTC = 11:00 KST
+    - cron: "17 2 * * *"  # 02:17 UTC = 11:17 KST -> 가동 시간 13분 정도 -> 11시 30분 노션 업로드
   workflow_dispatch: # 우리가 수동으로 실행 버튼 누를 수도 있게 함
 
 jobs:
