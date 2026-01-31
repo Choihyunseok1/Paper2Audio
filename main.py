@@ -1,46 +1,26 @@
 import os
-import re
-import io
-import time
-import datetime
-from dataclasses import dataclass
-from typing import List, Tuple, Optional, Dict, Any
-
 import arxiv
 import openai
-import requests
-from notion_client import Client as NotionClient
-from zoneinfo import ZoneInfo
+from notion_client import Client
+import datetime
+from pytz import timezone
 from pydub import AudioSegment
+import io
+import re
+from zoneinfo import ZoneInfo
 
 
-# =========================
-# ENV
-# =========================
-NOTION_TOKEN = os.environ.get("NOTION_TOKEN", "").strip()
-DATABASE_ID = os.environ.get("DATABASE_ID", "").strip()
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
-SEMANTIC_SCHOLAR_API_KEY = os.environ.get("SEMANTIC_SCHOLAR_API_KEY", "").strip()
+NOTION_TOKEN = os.environ["NOTION_TOKEN"]
+DATABASE_ID = os.environ["DATABASE_ID"]
+OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+GITHUB_USER = "Choihyunseok1"
+GITHUB_REPO = "CV_Papers_Podtcast_bot"
 
-GITHUB_USER = os.environ.get("GITHUB_USER", "Choihyunseok1")
-GITHUB_REPO = os.environ.get("GITHUB_REPO", "CV_Papers_Podtcast_bot")
-
-if not NOTION_TOKEN or not DATABASE_ID or not OPENAI_API_KEY:
-    raise RuntimeError("Missing env: NOTION_TOKEN / DATABASE_ID / OPENAI_API_KEY")
-
-notion = NotionClient(auth=NOTION_TOKEN)
+notion = Client(auth=NOTION_TOKEN)
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
 
-# =========================
-# CONFIG
-# =========================
-ARXIV_CATEGORY_QUERY = "cat:cs.CV"
-ARXIV_MAX_RESULTS = 800
-
-TOPK_SAVE = 10
 BATCH_SIZE_FULL = 2
-
 MAX_OUT_TOKENS_SUMMARY = 4000
 MAX_OUT_TOKENS_FULL_PER_BATCH = 2800
 
@@ -48,393 +28,125 @@ TTS_MODEL = "tts-1-hd"
 TTS_VOICE = "onyx"
 TTS_SPEED = 1.25
 
-TTS_CHUNK_CHARS = 1700
-
-SEOUL_TZ = ZoneInfo("Asia/Seoul")
-ET_TZ = ZoneInfo("America/New_York")
-
-S2_BASE = "https://api.semanticscholar.org/graph/v1"
-S2_TIMEOUT = 15
-
-CODE_HINTS = [
-    "github.com/",
-    "gitlab.com/",
-    "bitbucket.org/",
-    "huggingface.co/",
-]
-
-S2_MAX_RETRIES = 4
-S2_BACKOFF_BASE_SEC = 1.2
-S2_JITTER_SEC = 0.35
-S2_MIN_INTERVAL_SEC = 0.12
+TTS_CHUNK_CHARS = 2000
+TTS_CHUNK_OVERLAP = 0
 
 
-@dataclass
-class ScoredPaper:
-    paper: Any
-    arxiv_id: str
-    score: float
-    score_detail: Dict[str, float]
+def should_run_on_arxiv_announce_day():
+    """
+    arXiv announce(배포)는 보통 Eastern Time 기준 20:00에 이루어지고,
+    금/토(Eastern)에는 announce가 없습니다.
+    따라서 실행 시각 기준 Eastern 날짜가 금/토면 라디오 진행(생성)을 하지 않습니다.
+    """
+    et = ZoneInfo("America/New_York")
+    now_et = datetime.datetime.now(et)
+    # weekday(): Mon=0 ... Sun=6
+    # announce 없음: Fri(4), Sat(5)
+    if now_et.weekday() in (4, 5):
+        return False
+    return True
 
 
-# =========================
-# TIME WINDOW: arXiv announce 기준 (ET)
-# =========================
-def is_announce_day_et(d: datetime.date) -> bool:
-    return d.weekday() in (0, 1, 2, 3, 6)
+def medical_penalty_score(title, abstract):
+    """
+    Medical/Bio만 강하게 감점.
+    title+abstract에서 medical/bio imaging 신호 키워드가 2개 이상이면 -25점.
+    """
+    text = f"{title or ''} {abstract or ''}".lower()
+
+    keywords = [
+        "medical", "clinical", "patient", "disease",
+        "cancer", "tumor", "lesion",
+        "pathology", "histopathology", "radiology",
+        "ct", "mri", "pet", "ultrasound",
+        "organ", "tissue", "cell",
+        "diagnosis", "screening", "prognosis",
+        "pancreatic", "lung cancer", "breast cancer"
+    ]
+
+    hit = 0
+    for k in keywords:
+        if k in text:
+            hit += 1
+
+    return 25 if hit >= 2 else 0
 
 
-def latest_announce_date_et(now_et: datetime.datetime) -> datetime.date:
-    d = now_et.date()
-    if (not is_announce_day_et(d)) or (now_et.time() < datetime.time(20, 0)):
-        d = d - datetime.timedelta(days=1)
-        while not is_announce_day_et(d):
-            d = d - datetime.timedelta(days=1)
-        return d
-    return d
-
-
-def compute_announce_window_et(now_et: datetime.datetime) -> Tuple[datetime.datetime, datetime.datetime, datetime.date]:
-    ad = latest_announce_date_et(now_et)
-
-    if ad.weekday() == 6:
-        end_date = ad - datetime.timedelta(days=2)
-        end_et = datetime.datetime(end_date.year, end_date.month, end_date.day, 14, 0, tzinfo=ET_TZ)
-        start_et = end_et - datetime.timedelta(days=1)
-        return start_et, end_et, ad
-
-    if ad.weekday() == 0:
-        end_et = datetime.datetime(ad.year, ad.month, ad.day, 14, 0, tzinfo=ET_TZ)
-        start_et = end_et - datetime.timedelta(days=3)
-        return start_et, end_et, ad
-
-    end_et = datetime.datetime(ad.year, ad.month, ad.day, 14, 0, tzinfo=ET_TZ)
-    start_et = end_et - datetime.timedelta(days=1)
-    return start_et, end_et, ad
-
-
-# =========================
-# UTIL
-# =========================
-def safe_lower(s: str) -> str:
-    return (s or "").lower()
-
-
-def split_notion_text(text: str, max_len: int = 1900) -> List[str]:
-    t = (text or "").strip()
-    if not t:
+def split_notion_text(text, max_len=1900):
+    text = (text or "").strip()
+    if not text:
         return []
-    return [t[i:i + max_len] for i in range(0, len(t), max_len)]
+    return [text[i:i + max_len] for i in range(0, len(text), max_len)]
 
 
-def sanitize_title_for_tts(title: str) -> str:
-    if not title:
-        return ""
-    return re.sub(r"[:\-+/]", ",", title)
-
-
-def extract_arxiv_id(entry_id: str) -> str:
-    if not entry_id:
-        return ""
-    m = re.search(r"arxiv\.org/abs/([^v]+)(?:v\d+)?", entry_id)
-    if m:
-        return m.group(1).strip()
-    return entry_id.rsplit("/", 1)[-1].replace("v1", "").replace("v2", "").strip()
-
-
-def format_kst_date(now_kst: datetime.datetime) -> str:
-    return f"{now_kst.month}월 {now_kst.day}일"
-
-
-def format_kst_date_iso(now_kst: datetime.datetime) -> str:
-    return now_kst.strftime("%Y-%m-%d")
-
-
-def number_to_korean_ordinal(n: int) -> str:
-    mapping = {
-        1: "첫 번째",
-        2: "두 번째",
-        3: "세 번째",
-        4: "네 번째",
-        5: "다섯 번째",
-        6: "여섯 번째",
-        7: "일곱 번째",
-        8: "여덟 번째",
-        9: "아홉 번째",
-        10: "열 번째",
-    }
-    return mapping.get(n, f"{n}번째")
-
-
-def chunk_text_by_sentences(text: str, max_chars: int = 1700) -> List[str]:
-    t = (text or "").strip()
-    if not t:
+def chunk_text_by_chars(text, chunk_chars=2000, overlap=0):
+    text = (text or "").strip()
+    if not text:
         return []
-
-    sents = re.split(r"(?<=[\.\!\?\…])\s+|\n+", t)
-    sents = [s.strip() for s in sents if s and s.strip()]
-
-    chunks: List[str] = []
-    cur = ""
-
-    def push_current():
-        nonlocal cur
-        cc = cur.strip()
-        if cc:
-            chunks.append(cc)
-        cur = ""
-
-    for s in sents:
-        if not cur:
-            if len(s) <= max_chars:
-                cur = s
-            else:
-                for i in range(0, len(s), max_chars):
-                    part = s[i:i + max_chars].strip()
-                    if part:
-                        chunks.append(part)
-        else:
-            if len(cur) + 1 + len(s) <= max_chars:
-                cur = cur + " " + s
-            else:
-                push_current()
-                if len(s) <= max_chars:
-                    cur = s
-                else:
-                    for i in range(0, len(s), max_chars):
-                        part = s[i:i + max_chars].strip()
-                        if part:
-                            chunks.append(part)
-
-    push_current()
+    chunks = []
+    i = 0
+    n = len(text)
+    step = max(1, chunk_chars - overlap)
+    while i < n:
+        chunk = text[i:i + chunk_chars].strip()
+        if chunk:
+            chunks.append(chunk)
+        i += step
     return chunks
 
 
-# =========================
-# ARXIV FETCH
-# =========================
-def fetch_arxiv_candidates_in_window(start_et: datetime.datetime, end_et: datetime.datetime) -> List[Any]:
-    aclient = arxiv.Client(page_size=200, delay_seconds=0.0, num_retries=3)
-
-    search = arxiv.Search(
-        query=ARXIV_CATEGORY_QUERY,
-        max_results=ARXIV_MAX_RESULTS,
-        sort_by=arxiv.SortCriterion.SubmittedDate
-    )
-
-    candidates = []
-    for p in aclient.results(search):
-        pub_et = p.published.astimezone(ET_TZ)
-
-        if pub_et < start_et:
-            break
-
-        if start_et <= pub_et < end_et:
-            candidates.append(p)
-
-    return candidates
+def build_papers_info(papers):
+    papers_info = ""
+    for i, p in enumerate(papers):
+        papers_info += f"논문 {i+1} 제목: {p.title}\n초록: {p.summary}\n\n"
+    return papers_info
 
 
-# =========================
-# SEMANTIC SCHOLAR
-# =========================
-_s2_session = requests.Session()
-_s2_cache: Dict[str, Optional[Dict[str, Any]]] = {}
-_s2_last_call_ts = 0.0
-
-
-def s2_headers() -> Dict[str, str]:
-    h = {"User-Agent": "cv-papers-podcast-bot/1.0"}
-    if SEMANTIC_SCHOLAR_API_KEY:
-        h["x-api-key"] = SEMANTIC_SCHOLAR_API_KEY
-    return h
-
-
-def _sleep_backoff(attempt: int, retry_after: Optional[float] = None) -> None:
-    if retry_after is not None and retry_after > 0:
-        time.sleep(retry_after)
-        return
-    base = S2_BACKOFF_BASE_SEC * (2 ** max(0, attempt - 1))
-    time.sleep(base + (S2_JITTER_SEC * (attempt % 3)))
-
-
-def _respect_min_interval() -> None:
-    global _s2_last_call_ts
-    now = time.time()
-    elapsed = now - _s2_last_call_ts
-    if elapsed < S2_MIN_INTERVAL_SEC:
-        time.sleep(S2_MIN_INTERVAL_SEC - elapsed)
-    _s2_last_call_ts = time.time()
-
-
-def fetch_s2_paper_by_arxiv(arxiv_id: str) -> Optional[Dict[str, Any]]:
-    if not arxiv_id:
-        return None
-
-    if arxiv_id in _s2_cache:
-        return _s2_cache[arxiv_id]
-
-    url = f"{S2_BASE}/paper/ARXIV:{arxiv_id}"
-    fields = "title,authors.name,authors.hIndex,authors.paperCount,externalIds,url"
-
-    for attempt in range(1, S2_MAX_RETRIES + 1):
-        try:
-            _respect_min_interval()
-            r = _s2_session.get(
-                url,
-                headers=s2_headers(),
-                params={"fields": fields},
-                timeout=S2_TIMEOUT
-            )
-
-            if r.status_code == 200:
-                js = r.json()
-                _s2_cache[arxiv_id] = js
-                return js
-
-            if r.status_code == 429:
-                ra = r.headers.get("Retry-After")
-                retry_after = None
-                if ra:
-                    try:
-                        retry_after = float(ra)
-                    except Exception:
-                        retry_after = None
-                _sleep_backoff(attempt, retry_after=retry_after)
-                continue
-
-            if 500 <= r.status_code <= 599:
-                _sleep_backoff(attempt, retry_after=None)
-                continue
-
-            _s2_cache[arxiv_id] = None
-            return None
-
-        except requests.exceptions.Timeout:
-            _sleep_backoff(attempt, retry_after=None)
-        except Exception:
-            _sleep_backoff(attempt, retry_after=None)
-
-    _s2_cache[arxiv_id] = None
-    return None
-
-
-def compute_author_score(s2: Optional[Dict[str, Any]]) -> float:
-    if not s2 or "authors" not in s2:
-        return 10.0
-
-    authors = s2.get("authors") or []
-    if not authors:
-        return 10.0
-
-    h_list = []
-    pc_list = []
-    for a in authors:
-        h = a.get("hIndex")
-        pc = a.get("paperCount")
-        if isinstance(h, int):
-            h_list.append(h)
-        if isinstance(pc, int):
-            pc_list.append(pc)
-
-    if not h_list:
-        h_list = [0]
-
-    h_list_sorted = sorted(h_list, reverse=True)
-    top2 = h_list_sorted[:2]
-    h_avg = sum(top2) / max(1, len(top2))
-
-    if h_avg >= 40:
-        base = 62.0
-    elif h_avg >= 25:
-        base = 52.0
-    elif h_avg >= 15:
-        base = 40.0
-    elif h_avg >= 8:
-        base = 28.0
-    else:
-        base = 18.0
-
-    pc_max = max(pc_list) if pc_list else 0
-    if pc_max >= 200:
-        base += 6.0
-    elif pc_max >= 100:
-        base += 4.0
-    elif pc_max >= 50:
-        base += 2.0
-
-    return max(0.0, min(70.0, base))
-
-
-def compute_code_openness_score(p: Any) -> float:
-    title = safe_lower(p.title)
-    abst = safe_lower(p.summary)
-    text = title + " " + abst
-    code_hit = any(h in text for h in CODE_HINTS)
-    return 10.0 if code_hit else 0.0
-
-
-def score_paper(p: Any) -> ScoredPaper:
-    arxiv_id = extract_arxiv_id(getattr(p, "entry_id", ""))
-    s2 = fetch_s2_paper_by_arxiv(arxiv_id)
-
-    author = compute_author_score(s2)
-    code_open = compute_code_openness_score(p)
-
-    total_raw = author + code_open
-    total = max(0.0, min(100.0, total_raw * (100.0 / 80.0)))
-
-    s2_ok = 1.0 if (s2 is not None) else 0.0
-
-    return ScoredPaper(
-        paper=p,
-        arxiv_id=arxiv_id,
-        score=total,
-        score_detail={"author": author, "code_open": code_open, "s2_ok": s2_ok}
-    )
-
-
-# =========================
-# GPT PROMPTS
-# =========================
-def build_papers_info(papers: List[Any]) -> str:
-    out = []
-    for i, p in enumerate(papers, start=1):
-        out.append(f"논문 {i} 제목: {p.title}\n초록: {p.summary}\n")
-    return "\n".join(out).strip()
-
-
-def prompt_summary_and_3min(top_papers: List[Any], kst_date_iso: str, kst_date_korean: str) -> str:
-    papers_info = build_papers_info(top_papers)
+def prompt_summary_and_3min(valid_papers):
+    papers_info = build_papers_info(valid_papers)
     return f"""
-오늘은 {kst_date_korean}이며, 이 날짜 기준으로 서술하십시오.
-아래는 아카이브 cs.CV에서 {kst_date_iso}자 기준으로 선별된 상위 {len(top_papers)}편 논문입니다.
-(중요: 아래에 포함된 논문만 요약 및 오디오 대본을 작성하십시오. 나머지 논문은 절대 다루지 마십시오.)
+아래는 어제 저녁부터 오늘 새벽 사이에 새로 발표된 {len(valid_papers)}개의 컴퓨터 비전 논문입니다.
 
 {papers_info}
 
 위 논문들을 바탕으로 다음 두 가지를 작성해 주세요.
 
 1. [요약]
-- 노션 기록용 핵심 요약입니다.
-- 각 논문별로 제목을 언급하고, '-함', '-임' 형태의 짧은 요약체로 3줄씩 작성하십시오.
-- 한 줄이 끝나면 반드시 엔터로 구분하십시오.
-- 각 논문 요약 시작 시 '1. (논문제목)' 형식으로 번호를 붙이십시오.
-- 논문들 사이는 줄바꿈으로 구분하십시오.
+- 노션 기록용 핵심 요약.
+- 각 논문별로 제목을 언급하고, '-함', '-임' 형태의 짧은 요약체로 3줄씩 작성할 것
+- 한 줄이 끝나면 반드시 엔터로 구분해서 보기 편하게 만들 것
+- 각 논문 요약 시작시 '1. (논문제목)' 식으로 앞에 번호만 붙여 진행할 것
+- 논문들 사이는 줄바꿈으로 구분할 것.
+
 
 2. [3분대본]
-- "시간이 없으신 분들을 위한 3분 핵심 요약입니다"로 시작하십시오.
-- 위에 제공된 상위 {len(top_papers)}편 논문을 빠짐없이 포함하십시오.
-- 각 논문 제목을 말한 뒤, 논문 당 길이를 자동 조절하여 전체가 약 3분(±15초)이 되도록 구성하십시오.
-- 논문의 공식 제목은 반드시 영문으로 표기하되, 제목의 특수 기호(:, -, +, / 등)는 쉼표(,)로 바꾸십시오.
-- CNN, ViT, GAN, SOTA 등 약어는 영문 그대로 사용하십시오.
-- 전문 기술 용어는 번역하지 말고 반드시 영어 원어 그대로 사용하십시오.
-- 쉼표(,)를 충분히 사용하여 호흡 지점을 표시하십시오.
-- 전체 브리핑은 공적인 라디오 방송 톤의 존댓말로 작성하십시오.
-- 반말, 구어체 축약, 친근한 대화체(예: ~해요, ~했죠)는 사용하지 마십시오.
-- 연구 비서가 공식적으로 설명하는 말투를 유지하십시오.
+- "시간이 없으신 분들을 위한 3분 핵심 요약입니다"로 시작할 것.
+- 모든 논문을 빠짐없이 포함할 것.
+- 각 논문 제목을 말한 뒤 , 논문 당 약 400자 내외로 설명할 것.
+- 전체 길이는 약 3분(±15초) 분량이 되도록 조절할 것.
+- 논문 수가 많을 경우, 각 논문의 설명 길이를 자동으로 줄여서 전체 분량을 유지할 것.
+- 분량이 부족하더라도 일부 논문을 생략하지 말 것.
+- 모든 논문을 최소한 한 단락 이상 설명할 것.
+- 논문의 공식 제목은 반드시 영문으로 표기하되, 제목의 특수 기호(:, -, +, / 등)는 쉼표(,)로 바꿀 것.
+- CNN, ViT, GAN, SOTA 등 약어는 영문 그대로 사용할 것.
+- 전문 기술 용어(diffusion, transformer, attention, self-attention, cross-attention, latent, encoder, decoder, backbone, head, neck, pipeline, architecture, framework, module, block, layer, stage, feature, representation, embedding, token, patch, pixel, resolution, scale, multi-scale, spatial, temporal, semantic, instance, object, bounding box, mask, classification, regression, detection, segmentation, tracking, matching, retrieval, generation, reconstruction, prediction, training, inference, optimization, loss, objective, gradient, backpropagation, scheduler, warmup, regularization, overfitting, underfitting, convergence, likelihood, log-likelihood, prior, posterior, sampling, denoising, noise, variance, distribution, gaussian, entropy, kl-divergence, dataset, benchmark, metric, accuracy, precision, recall, f-score, mean average precision, intersection over union, foundation model, large-scale, multi-modal, vision-language, prompt, prompting, alignment, zero-shot, few-shot, in-context learning, parameter-efficient tuning, point cloud, voxel, mesh, depth, pose, camera, ray, rendering, video, frame, motion, optical flow, reinforcement learning, policy, value function, reward, exploration, exploitation, environment, agent, state, action, episode, timestep, imitation learning, self-supervised learning, supervised learning, unsupervised learning, contrastive learning, pretraining, fine-tuning, transfer learning, curriculum learning, data augmentation, normalization, batch normalization, layer normalization, residual connection, skip connection, attention map, positional encoding, query, key, value, softmax, temperature, logits, probability, score, confidence, threshold, calibration, robustness, generalization, scalability, efficiency, latency, throughput, memory, parameter, hyperparameter, initialization, seed, reproducibility, ablation study, baseline, state-of-the-art, sota, comparison, improvement, gain, trade-off, limitation, future work 등)는 번역하지 말고 반드시 영어 원어 그대로 사용할 것.
 
-출력 형식
+- 쉼표(,)를 충분히 사용해 호흡 지점을 표시할 것.
+- 동료 연구자에게 설명하듯 차분한 구어체.
+- 전체 브리핑은 반드시 공적인 라디오 방송 톤의 존댓말로 작성할 것.
+- 반말, 구어체 축약, 친근한 대화체(예: ~해요, ~했죠)는 사용하지 말 것.
+- 연구 비서가 공식적으로 설명하는 말투를 유지할 것.
+
+    [마무리 규칙]
+- 모든 논문 설명이 끝난 뒤, 반드시 아래 톤의 아웃트로 멘트를 한 문단으로 추가할 것.
+- 감사 인사나 일상적인 인삿말은 사용하지 말 것.
+- 더 자세한 내용이 전체 브리핑에 있다는 점을 자연스럽게 안내할 것.
+
+아웃트로 예시 톤:
+"보다 자세한 내용은 전체 브리핑에서 이어서 다룹니다.
+지금까지 오늘의 컴퓨터 비전 논문 3분 핵심 요약이었습니다."
+
+출력 형식:
 [요약]
 (내용)
 
@@ -443,49 +155,51 @@ def prompt_summary_and_3min(top_papers: List[Any], kst_date_iso: str, kst_date_k
 """.strip()
 
 
-def prompt_full_body_for_batch(
-    batch_papers: List[Any],
-    batch_index: int,
-    total_batches: int,
-    kst_date_iso: str,
-    kst_date_korean: str
-) -> str:
+def prompt_full_body_for_batch(batch_papers, batch_index, total_batches, start_index):
     papers_info = build_papers_info(batch_papers)
 
     return f"""
-오늘은 {kst_date_korean}이며, {kst_date_iso}자 기준으로 서술하십시오.
-
-아래는 상위 선별 논문 배치 {batch_index}/{total_batches}입니다.
-(중요: 아래에 포함된 논문만 본문 스크립트를 작성하십시오.)
+아래는 컴퓨터 비전 논문 배치 {batch_index}/{total_batches}입니다.
+이 배치의 논문 전역 번호는 {start_index}부터 시작합니다.
 
 {papers_info}
 
-중요
-- 방송의 도입부와 맺음말을 쓰지 마십시오.
-- "첫 번째 논문", "이번 배치", "안녕하세요", "오늘은" 같은 진행 멘트와 순서 멘트를 쓰지 마십시오.
-- 오직 각 논문 설명 본문만 출력하십시오.
+중요:
+- 지금은 방송의 도입부와 맺음말을 쓰지 않습니다.
+- "첫 번째 논문", "이번 배치", "안녕하세요", "오늘은" 같은 진행 멘트와 순서 멘트를 절대 쓰지 마세요.
+- 오직 각 논문 설명 본문만 출력하세요.
 
-분량
-- 논문 1편당 약 1700~2200자 내외로 상세히 설명하십시오.
+분량:
+- 논문 1편당 약 2200자 내외로 상세히 설명하세요.
 
-언어 규칙
-- CNN, ViT, GAN, SOTA 등 약어는 영문 그대로 사용하십시오.
-- 전문 기술 용어는 번역하지 말고 영어 원어 그대로 사용하십시오.
-- 쉼표(,)로 호흡, 마침표(.)로 강조하십시오.
-- 공적인 라디오 방송 톤의 존댓말을 유지하십시오.
-- 반말, 구어체 축약, 친근한 대화체(예: ~해요, ~했죠)를 사용하지 마십시오.
-- "A.", "B.", "첫째", "다음으로", "이어서" 등 구조 또는 순서를 직접적으로 언급하지 마십시오.
+구조 (내부 참고용):
+A. 문제의식과 배경
+B. 핵심 아이디어 한 줄 요약과 의미
+C. 방법을 단계적으로 설명
+D. 실험과 결과의 경향
+E. 한계와 추후 과제
+F. 실전 감상 포인트 2개
 
-출력 형식(반드시 준수)
+언어 규칙:
+- 쉼표(,)로 호흡, 마침표(.)로 강조.
+- CNN, ViT, GAN, SOTA 등 약어는 영문 그대로 사용할 것.
+- 동료 연구자에게 설명하듯 차분한 구어체.
+- 오디오 스크립트에서는 절대 "A.", "B.", "첫째", "다음으로", "이어서" 등 구조나 순서를 직접적으로 언급하지 마세요.
+- 전체 브리핑은 반드시 공적인 라디오 방송 톤의 존댓말로 작성할 것.
+- 반말, 구어체 축약, 친근한 대화체(예: ~해요, ~했죠)는 사용하지 말 것.
+- 연구 비서가 공식적으로 설명하는 말투를 유지할 것.
+- 전문 기술 용어(diffusion, transformer, attention, self-attention, cross-attention, latent, encoder, decoder, backbone, head, neck, pipeline, architecture, framework, module, block, layer, stage, feature, representation, embedding, token, patch, pixel, resolution, scale, multi-scale, spatial, temporal, semantic, instance, object, bounding box, mask, classification, regression, detection, segmentation, tracking, matching, retrieval, generation, reconstruction, prediction, training, inference, optimization, loss, objective, gradient, backpropagation, scheduler, warmup, regularization, overfitting, underfitting, convergence, likelihood, log-likelihood, prior, posterior, sampling, denoising, noise, variance, distribution, gaussian, entropy, kl-divergence, dataset, benchmark, metric, accuracy, precision, recall, f-score, mean average precision, intersection over union, foundation model, large-scale, multi-modal, vision-language, prompt, prompting, alignment, zero-shot, few-shot, in-context learning, parameter-efficient tuning, point cloud, voxel, mesh, depth, pose, camera, ray, rendering, video, frame, motion, optical flow, reinforcement learning, policy, value function, reward, exploration, exploitation, environment, agent, state, action, episode, timestep, imitation learning, self-supervised learning, supervised learning, unsupervised learning, contrastive learning, pretraining, fine-tuning, transfer learning, curriculum learning, data augmentation, normalization, batch normalization, layer normalization, residual connection, skip connection, attention map, positional encoding, query, key, value, softmax, temperature, logits, probability, score, confidence, threshold, calibration, robustness, generalization, scalability, efficiency, latency, throughput, memory, parameter, hyperparameter, initialization, seed, reproducibility, ablation study, baseline, state-of-the-art, sota, comparison, improvement, gain, trade-off, limitation, future work 등)는 번역하지 말고 반드시 영어 원어 그대로 사용할 것.
+
+출력 형식(반드시 준수):
 TITLE: <영문 제목>
 BODY:
 <본문>
 
-논문과 논문 사이는 빈 줄 2줄로 구분하십시오.
+(논문과 논문 사이는 빈 줄 2줄)
 """.strip()
 
 
-def call_gpt_text(system_text: str, user_text: str, max_tokens: int) -> str:
+def call_gpt_text(system_text, user_text, max_tokens):
     resp = client.chat.completions.create(
         model="gpt-4o",
         messages=[
@@ -497,11 +211,8 @@ def call_gpt_text(system_text: str, user_text: str, max_tokens: int) -> str:
     return (resp.choices[0].message.content or "").strip()
 
 
-# =========================
-# TTS
-# =========================
-def synthesize_tts_to_audio(text: str, tts_chunk_chars: int = 1700) -> AudioSegment:
-    chunks = chunk_text_by_sentences(text, max_chars=tts_chunk_chars)
+def synthesize_tts_to_audio(text, tts_chunk_chars=2000, overlap=0):
+    chunks = chunk_text_by_chars(text, chunk_chars=tts_chunk_chars, overlap=overlap)
     combined = AudioSegment.empty()
     for chunk in chunks:
         audio_part_response = client.audio.speech.create(
@@ -516,97 +227,120 @@ def synthesize_tts_to_audio(text: str, tts_chunk_chars: int = 1700) -> AudioSegm
     return combined
 
 
-def parse_title_body_blocks(text: str) -> List[Tuple[str, str]]:
-    t = (text or "").strip()
-    if not t:
+def sanitize_title_for_tts(title):
+    if not title:
+        return ""
+    return re.sub(r"[:\-+/]", ",", title)
+
+
+def parse_title_body_blocks(text):
+    text = (text or "").strip()
+    if not text:
         return []
 
     pattern = r"TITLE:\s*(.*?)\s*BODY:\s*(.*?)(?=(?:\n\s*TITLE:)|\Z)"
-    matches = re.findall(pattern, t, flags=re.DOTALL | re.IGNORECASE)
+    matches = re.findall(pattern, text, flags=re.DOTALL | re.IGNORECASE)
 
     blocks = []
     for title, body in matches:
-        tt = title.strip()
-        bb = body.strip()
-        if tt and bb:
-            blocks.append((tt, bb))
-    return blocks
+        t = title.strip()
+        b = body.strip()
+        if t and b:
+            blocks.append((t, b))
+
+    if blocks:
+        return blocks
+
+    fallback = []
+    chunks = re.split(r"\n\s*TITLE:\s*", "\n" + text)
+    for c in chunks:
+        c = c.strip()
+        if not c:
+            continue
+        if "BODY:" in c:
+            t, b = c.split("BODY:", 1)
+            t = t.strip()
+            b = b.strip()
+            if t and b:
+                fallback.append((t, b))
+    return fallback
 
 
-def assemble_radio_script(
-    full_batches_text: List[str],
-    total_papers: int,
-    now_kst: datetime.datetime
-) -> str:
-    date_korean = format_kst_date(now_kst)
+def assemble_radio_script(full_batches_text, total_papers):
+    intro = f"안녕하세요, 아이알씨브이 랩실의 수석 연구 비서입니다. 오늘 살펴볼 컴퓨터 비전 신규 논문은 총 {total_papers}건입니다."
+    outro = "오늘의 브리핑이 여러분의 연구에 영감이 되길 바랍니다. 이상, 아이알씨브이 연구 비서였습니다. 감사합니다."
 
-    intro = (
-        "안녕하세요, 아이알씨브이 랩실의 수석 연구 비서입니다.\n"
-        f"지금부터 {date_korean}자 아카이브에 업데이트된 컴퓨터 비전 논문들을 브리핑 해드리겠습니다."
-    )
-    outro = "이상으로 오늘의 전체 브리핑을 마칩니다."
-
-    all_blocks: List[Tuple[str, str]] = []
+    all_blocks = []
     for batch_text in full_batches_text:
         all_blocks.extend(parse_title_body_blocks(batch_text))
 
     script_parts = [intro, ""]
     for i, (title, body) in enumerate(all_blocks, start=1):
-        ordinal = number_to_korean_ordinal(i)
         title_tts = sanitize_title_for_tts(title)
-        script_parts.append(f"{ordinal} 논문입니다.")
+
+        if i == 1:
+            transition = "오늘 첫 번째로 살펴볼 논문입니다."
+        else:
+            transition = f"계속해서 {i}번째 논문을 보겠습니다."
+
+        script_parts.append(transition)
         script_parts.append(f"논문 제목은 {title_tts} 입니다.")
         script_parts.append(body)
         script_parts.append("")
 
     if len(all_blocks) < total_papers:
-        script_parts.append("일부 원고 생성이 누락되어, 생성된 부분까지만 읽었습니다.")
+        script_parts.append("일부 논문은 요약 중심으로 간략히 다뤄졌습니다.")
         script_parts.append("")
 
     script_parts.append(outro)
     return "\n".join(script_parts).strip()
 
 
-# =========================
-# NOTION
-# =========================
-def notion_rich_link(text: str, url: str) -> Dict[str, Any]:
-    return {
-        "type": "text",
-        "text": {"content": text, "link": {"url": url}}
-    }
-
-
 def run_bot():
-    now_kst = datetime.datetime.now(SEOUL_TZ)
-    now_et = now_kst.astimezone(ET_TZ)
+    base_path = os.path.dirname(os.path.abspath(__file__))
+    audio_dir = os.path.join(base_path, "audio")
+    os.makedirs(audio_dir, exist_ok=True)
 
-    start_et, end_et, _announce_date = compute_announce_window_et(now_et)
+    # 2) arXiv 업데이트(announce) 날에만 라디오 진행
+    if not should_run_on_arxiv_announce_day():
+        print("arXiv announce가 없는 날(Eastern 기준 금/토)이라 종료합니다.")
+        return
 
-    kst_date_iso = format_kst_date_iso(now_kst)
-    kst_date_korean = format_kst_date(now_kst)
+    seoul_tz = timezone("Asia/Seoul")
+    now = datetime.datetime.now(seoul_tz)
+    yesterday_6pm = (now - datetime.timedelta(days=1)).replace(hour=18, minute=0, second=0, microsecond=0)
 
-    candidates = fetch_arxiv_candidates_in_window(start_et, end_et)
+    search = arxiv.Search(
+        query="cat:cs.CV",
+        max_results=10,
+        sort_by=arxiv.SortCriterion.SubmittedDate
+    )
+
+    candidates = []
+    for p in search.results():
+        p_date = p.published.astimezone(seoul_tz)
+        if p_date > yesterday_6pm:
+            candidates.append(p)
+
     if not candidates:
-        print("해당 announce window에서 새로 잡힌 논문이 없습니다.")
+        print("해당 announce window에서 새로 올라온 논문이 없습니다.")
         return
 
-    scored: List[ScoredPaper] = []
+    # 1) Medical/Bio만 강하게 감점 로직 포함
+    scored = []
     for p in candidates:
-        scored.append(score_paper(p))
+        penalty = medical_penalty_score(p.title, p.summary)
+        # 기존 동작을 크게 바꾸지 않기 위해, 후보 10개 내에서만 페널티 기반 재정렬 후 Top10 유지
+        score = 100 - penalty
+        scored.append((score, penalty, p))
 
-    scored.sort(key=lambda sp: sp.score, reverse=True)
-    top = scored[:min(TOPK_SAVE, len(scored))]
-    top_papers = [sp.paper for sp in top]
+    scored.sort(key=lambda x: x[0], reverse=True)
+    valid_papers = [x[2] for x in scored[:10]]
 
-    if not top_papers:
-        print("TopK 선별 결과가 비어 있습니다.")
-        return
+    system_summary = "너는 IRCV 랩실의 수석 연구 비서이자 AI 전문 라디오 진행자야. 한국어로 요약과 3분 대본을 작성해줘."
+    system_full = "너는 IRCV 랩실의 수석 연구 비서이자 AI 전문 라디오 진행자야. 한국어로 논문 본문 스크립트만 작성해줘."
 
-    system_summary = "너는 IRCV 랩실의 수석 연구 비서다. 한국어로 요약과 3분 대본을 공적인 존댓말 톤으로 작성하라."
-    system_full = "너는 IRCV 랩실의 수석 연구 비서다. 한국어로 논문 본문 스크립트만 공적인 존댓말 톤으로 작성하라."
-
-    user_summary = prompt_summary_and_3min(top_papers, kst_date_iso, kst_date_korean)
+    user_summary = prompt_summary_and_3min(valid_papers)
     summary_out = call_gpt_text(system_summary, user_summary, MAX_OUT_TOKENS_SUMMARY)
 
     if "[3분대본]" in summary_out:
@@ -616,53 +350,47 @@ def run_bot():
         summary_text = summary_out.replace("[요약]", "").strip()
         audio_script_3min = ""
 
-    paper_batches = [top_papers[i:i + BATCH_SIZE_FULL] for i in range(0, len(top_papers), BATCH_SIZE_FULL)]
+    paper_batches = [valid_papers[i:i + BATCH_SIZE_FULL] for i in range(0, len(valid_papers), BATCH_SIZE_FULL)]
     total_batches = len(paper_batches)
 
-    full_batches_text: List[str] = []
+    full_batches_text = []
     for idx, batch in enumerate(paper_batches, start=1):
-        user_full = prompt_full_body_for_batch(batch, idx, total_batches, kst_date_iso, kst_date_korean)
+        start_index = (idx - 1) * BATCH_SIZE_FULL + 1
+        user_full = prompt_full_body_for_batch(batch, idx, total_batches, start_index)
         batch_text = call_gpt_text(system_full, user_full, MAX_OUT_TOKENS_FULL_PER_BATCH)
         full_batches_text.append(batch_text)
 
-    audio_script_full = assemble_radio_script(
-        full_batches_text,
-        total_papers=len(top_papers),
-        now_kst=now_kst
+    audio_script_full = assemble_radio_script(full_batches_text, total_papers=len(valid_papers))
+
+    combined_audio = synthesize_tts_to_audio(
+        audio_script_full,
+        tts_chunk_chars=TTS_CHUNK_CHARS,
+        overlap=TTS_CHUNK_OVERLAP
     )
 
-    base_path = os.path.dirname(os.path.abspath(__file__))
-    audio_dir = os.path.join(base_path, "audio")
-    os.makedirs(audio_dir, exist_ok=True)
-
-    today_date = now_kst.strftime("%Y%m%d")
+    today_date = now.strftime("%Y%m%d")
     file_name_full = f"CV_Daily_Briefing_{today_date}.mp3"
-    file_name_3min = f"3Min_Summary_{today_date}.mp3"
-
     full_file_path = os.path.join(audio_dir, file_name_full)
-    full_file_path_3min = os.path.join(audio_dir, file_name_3min)
-
-    combined_audio = synthesize_tts_to_audio(audio_script_full, tts_chunk_chars=TTS_CHUNK_CHARS)
     combined_audio.export(full_file_path, format="mp3")
 
+    file_name_3min = f"3Min_Summary_{today_date}.mp3"
+    full_file_path_3min = os.path.join(audio_dir, file_name_3min)
+
     if audio_script_3min.strip():
-        audio_3min = synthesize_tts_to_audio(audio_script_3min, tts_chunk_chars=TTS_CHUNK_CHARS)
+        audio_3min = synthesize_tts_to_audio(
+            audio_script_3min,
+            tts_chunk_chars=TTS_CHUNK_CHARS,
+            overlap=TTS_CHUNK_OVERLAP
+        )
         audio_3min.export(full_file_path_3min, format="mp3")
     else:
         open(full_file_path_3min, "wb").close()
 
     audio_url = f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/audio/{file_name_full}"
     audio_url_3min = f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/main/audio/{file_name_3min}"
-
-    page_title = f"{now_kst.strftime('%Y-%m-%d')} 모닝 브리핑 논문 {len(top_papers)}개"
+    page_title = f"{now.strftime('%Y-%m-%d')} 모닝 브리핑 ({len(valid_papers)}개)"
 
     notion_children = [
-        {
-            "object": "block",
-            "type": "paragraph",
-            "paragraph": {"rich_text": [{"type": "text", "text": {"content": f"기준 날짜: {kst_date_iso} (KST)"}}]}
-        },
-        {"object": "block", "type": "divider", "divider": {}},
         {"object": "block", "type": "heading_2",
          "heading_2": {"rich_text": [{"type": "text", "text": {"content": "논문 핵심 요약"}}]}},
     ]
@@ -677,24 +405,17 @@ def run_bot():
     notion_children += [
         {"object": "block", "type": "divider", "divider": {}},
         {"object": "block", "type": "heading_2",
-         "heading_2": {"rich_text": [{"type": "text", "text": {"content": "논문 원문 링크"}}]}},
+         "heading_2": {"rich_text": [{"type": "text", "text": {"content": "논문 원문 링크"}}]}}
     ]
 
-    # 점수 표기 제거: 제목 + PDF 링크만
-    for rank, sp in enumerate(top, start=1):
-        p = sp.paper
-        line = f"{rank}. {p.title}"
+    for i, p in enumerate(valid_papers):
         notion_children.append({
-            "object": "block",
-            "type": "bulleted_list_item",
+            "object": "block", "type": "bulleted_list_item",
             "bulleted_list_item": {
                 "rich_text": [
-                    {"type": "text", "text": {"content": line + " "}},
-                    {
-                        "type": "text",
-                        "text": {"content": "PDF", "link": {"url": p.pdf_url}},
-                        "annotations": {"bold": True, "color": "default"}
-                    }
+                    {"type": "text", "text": {"content": f"{i + 1}. {p.title} "}},
+                    {"type": "text", "text": {"content": "PDF", "link": {"url": p.pdf_url}},
+                     "annotations": {"bold": True, "color": "blue"}}
                 ]
             }
         })
@@ -703,14 +424,34 @@ def run_bot():
         parent={"database_id": DATABASE_ID},
         properties={
             "요약 & 논문링크": {"title": [{"text": {"content": page_title}}]},
-            "날짜": {"date": {"start": now_kst.date().isoformat()}},
-            "전체 브리핑": {"rich_text": [notion_rich_link("▶ 전체 브리핑 다운", audio_url)]},
-            "3분 요약": {"rich_text": [notion_rich_link("▶ 3분 요약 다운", audio_url_3min)]},
+            "날짜": {"date": {"start": now.date().isoformat()}},
+            "전체 브리핑": {
+                "rich_text": [
+                    {
+                        "type": "text",
+                        "text": {
+                            "content": "▶ 전체 브리핑 다운",
+                            "link": {"url": audio_url}
+                        }
+                    }
+                ]
+            },
+            "3분 요약": {
+                "rich_text": [
+                    {
+                        "type": "text",
+                        "text": {
+                            "content": "▶ 3분 요약 다운",
+                            "link": {"url": audio_url_3min}
+                        }
+                    }
+                ]
+            }
         },
         children=notion_children
     )
 
-    print(f"완료: candidates={len(candidates)}, scored_all={len(scored)}, saved_top={len(top_papers)}")
+    print(f"통합 브리핑 생성 완료: {len(valid_papers)}개의 논문")
 
 
 if __name__ == "__main__":
