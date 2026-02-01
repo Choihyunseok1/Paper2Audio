@@ -1,22 +1,26 @@
 name: CV_Papers_Podcast_bot
+
 on:
-  schedule:
-    - cron: "17 2 * * *"  # 02:17 UTC = 11:17 KST -> 가동 시간 13분 정도 -> 11시 30분 노션 업로드
-  workflow_dispatch: # 우리가 수동으로 실행 버튼 누를 수도 있게 함
+  repository_dispatch:
+    types: [run_cv_bot]      # GAS에서 보낼 신호 이름입니다.
+  workflow_dispatch:          # 수동 실행 버튼 유지
 
 jobs:
   run_bot:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+      
       - name: Python 세팅
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
+          
       - name: 도구 설치
         run: |
           sudo apt-get update && sudo apt-get install -y ffmpeg
           pip install arxiv openai notion_client pytz pydub
+          
       - name: 프로그램 실행
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
@@ -26,8 +30,10 @@ jobs:
         
       - name: 생성된 오디오 파일을 저장소에 저장
         run: |
-          git config --global user.name "GitHub Action"
-          git config --global user.body "action@github.com"
-          git add audio/*.mp3
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          # audio 폴더가 없을 경우를 대비해 생성
+          mkdir -p audio
+          git add audio/*.mp3 || echo "No audio files to add"
           git commit -m "Add daily podcast audio" || echo "No changes to commit"
           git push
